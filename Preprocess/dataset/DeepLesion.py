@@ -112,8 +112,8 @@ class DeepLesion(torch.utils.data.Dataset):
         self.load_mask = True
         # load images
         gt, metal = self.load_data(data_file)#train和target
-        if self.partial_holdout:
-            gt, _ = self.load_data(choice(self.invisible_files))
+        # if self.partial_holdout:
+        #     gt, metal = self.load_data(choice(self.invisible_files))
 
         if self.random_flip and np.random.rand() >= 0.5:#翻转
             gt, metal = gt[::-1, :], metal[::-1, :]
@@ -137,9 +137,9 @@ class DeepLesion(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         if self.random_mask:
-            gt_file, metal_files = self.visible_dict[index]  #
+            gt_file, metal_files = self.invisible_dict[index]  #
             data_file = gt_file, choice(metal_files)
         else:
-            data_file = self.visible_files[index]
+            data_file = self.invisible_files[index]
 
         return self.get(data_file)

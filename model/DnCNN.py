@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 import torch.optim as optim
 from torch.optim.lr_scheduler import MultiStepLR
 class DnCNN(nn.Module):
-    def __init__(self, depth=17, n_channels=64, image_channels=1, use_bnorm=True, kernel_size=3):
+    def __init__(self, depth=17, n_channels=128, image_channels=1, use_bnorm=True, kernel_size=3):
         super(DnCNN, self).__init__()
         kernel_size = 3
         padding = 1
