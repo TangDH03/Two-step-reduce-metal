@@ -12,6 +12,10 @@ import torch
 from model.DnCNN import DnCNN
 from torch.nn.modules.loss import _Loss
 import torch.optim as optim
+from model.PconvNet import PConvUNet
+from model.PconvNet import VGG16FeatureExtractor
+from model.loss import InpaintingLoss
+from model import opt
 from PIL import Image
 class sum_squared_error(_Loss):  # PyTorch 0.4.1
     """
@@ -48,23 +52,29 @@ if __name__ == "__main__":
     run_dir = path.join(opts["checkpoints_dir"], "deep_lesion")
     if not path.isdir(run_dir): os.makedirs(run_dir)
     save_config(opts, path.join(run_dir, "train_options.yaml"))
-    def save_image(raw_image,output,index):
+    def save_image(raw_image,denoise,output,index):
         raw_image = raw_image.cpu().detach().numpy()
         #temp = raw_image[0].reshape((256,256))
         #name = "{}_iter_1.png".format(index)
         output = output.cpu().detach().numpy()
+        denoise = denoise.cpu().detach().numpy()
         #img1 = Image.fromarray(raw_image[0].reshape((256,256)))
-        name = "{}_iter_1.png".format(index)
+        name = "./train/{}a_iter_1.png".format(index)
         plt.imsave(name,raw_image[0].reshape((256,256)),cmap="gray")
         #img2 = Image.fromarray(output[0].reshape((256,256)))
-        name = "{}_iter_2.png".format(index)
+        name = "./train/{}c_iter_1.png".format(index)
         plt.imsave(name,output[0].reshape((256,256)),cmap="gray")
         #img3 = Image.fromarray(raw_image[1].reshape((256,256)))
-        name = "{}_iter_3.png".format(index)
+        name = "./train/{}d_iter_2.png".format(index)
         plt.imsave(name,raw_image[1].reshape((256,256)),cmap="gray")
-        #img4 = Image.fromarray(output[0].reshape((256,256)))
-        name = "{}_iter_4.png".format(index)
+        #img2 = Image.fromarray(output[0].reshape((256,256)))
+        name = "./train/{}f_iter_2.png".format(index)
         plt.imsave(name,output[1].reshape((256,256)),cmap="gray")
+        name = "./train/{}b_iter_1.png".format(index)
+        plt.imsave(name,denoise[0].reshape((256,256)),cmap="gray")
+        #img4 = Image.fromarray(output[0].reshape((256,256)))
+        name = "./train/{}e_iter_2.png".format(index)
+        plt.imsave(name,denoise[1].reshape((256,256)),cmap="gray")
     def get_image(data):
         dataset_type = dataset_opts['dataset_type']
         if dataset_type == "deep_lesion":
@@ -80,33 +90,59 @@ if __name__ == "__main__":
     dataset_opts = opts['dataset']
     train_dataset = get_dataset(**dataset_opts)
     train_loader = DataLoader(train_dataset,
-        batch_size=opts["batch_size"], num_workers=6, shuffle=True)  # num_workrt debug=0 run =2
+        batch_size=opts["batch_size"], num_workers=12, shuffle=True)  # num_workrt debug=0 run =2
     ######################################
     #########Prepare to Train################
     ######################################
-    criterion = sum_squared_error()
-    model = DnCNN()
-    model = model.cuda()
-  
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    for epoch in range(0, 50):
+    #Denoise
+    Denoisecriterion = sum_squared_error()
+    Denoisemodel = DnCNN()
+    Denoisemodel = Denoisemodel.cuda()
+    Denoiseoptimizer = optim.Adam(Denoisemodel.parameters(), lr=args.lr)
+    #Inpainting
+    Inpaintingmodel = PConvUNet().cuda()
+    Inpaintingoptimizer = optim.Adam(filter(lambda p:p.requires_grad,Inpaintingmodel.parameters()),lr =2e-4)
+    Inpaintingcriterion = InpaintingLoss(VGG16FeatureExtractor()).to(torch.device('cuda'))
+    for epoch in range(0, 60):
             epoch_loss = 0
+            Inpaintingmodel.train()
             for n_count, data in enumerate(train_loader):
-                    optimizer.zero_grad()
+                    ##Denoise##
+                    Denoiseoptimizer.zero_grad()
                     gt = data['hq_image'].cuda()
                     mask = data['mask'].cuda()
                     image = data['lq_image'].cuda()
                     mask = 1-mask
                     gt = gt*mask
                     image = image*mask
-                    output = model(image)
-                    loss = criterion(model(image), gt)
+                    output = Denoisemodel(image)
+                    loss = Denoisecriterion(output, gt)
                     epoch_loss += loss.item()
-                    loss.backward()
-                    optimizer.step()
-                    if n_count%10==0:
-                        print('%4d %4d loss = %2.4f' % (epoch+1, n_count, loss.item()/2))
-                    if n_count%100==0:
-                        save_image(image,output,epoch*1000+n_count)
+                    loss.backward(retain_graph=True)
+                    Denoiseoptimizer.step()
+                    denoiseImage = output
+                    ##Inpainting##
+                    #if epoch>=30:
+                    Inpaintingoptimizer.zero_grad()
+                    finaloutput,_ = Inpaintingmodel(denoiseImage,mask)
+                    loss_dict = Inpaintingcriterion(denoiseImage,mask,finaloutput,data['hq_image'].cuda())
+                    Inpaintingloss = 0.0
+                    for key,coef in opt.LAMBDA_DICT.items():
+                        value = coef*loss_dict[key]
+                        Inpaintingloss += value
+                    
+                    Inpaintingloss.backward(retain_graph=True)
+                    Inpaintingoptimizer.step()
+                    #if n_count%10==0 and epoch<30:
+                        #print('%4d %4d  Denoiseloss = %2.4f' % (epoch+1, n_count, loss.item()/2))
+                        #print('%4d %4d Inpaintloss = %2.4f' % (epoch+1, n_count, Inpaintingloss.item()/2))
+                    #if n_count%100==0 and epoch<30:
+                        #save_image(image,denoiseImage,denoiseImage,epoch*1000+n_count)
+                    if n_count%10==0: #and epoch>=30:
+                        print('%4d %4d  Denoiseloss = %2.4f' % (epoch+1, n_count, loss.item()/2))
+                        print('%4d %4d Inpaintloss = %2.4f' % (epoch+1, n_count, Inpaintingloss.item()/2))
+                    if n_count%100==0:# and epoch>=30:
+                        save_image(image,denoiseImage,denoiseImage+(1-mask)*finaloutput,epoch*1000+n_count)
             print("epoch = %4d,loss = %4.4f  "% (epoch+1,epoch_loss/n_count))
-            torch.save(model, os.path.join(".", 'model_%03d.pth' % (epoch+1)))
+            torch.save(Denoisemodel, os.path.join(".", 'denoisemodel_%03d.pth' % (epoch+1)))
+            torch.save(Inpaintingmodel, os.path.join(".", 'inpaintingmodel_%03d.pth' % (epoch+1)))

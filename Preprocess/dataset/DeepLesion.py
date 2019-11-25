@@ -132,8 +132,8 @@ class DeepLesion(torch.utils.data.Dataset):
         return data
 
     def __len__(self):
-        if self.random_mask: return len(self.visible_dict)
-        else: return len(self.visible_files)
+        if self.random_mask: return len(self.invisible_dict)
+        else: return len(self.invisible_files)
 
     def __getitem__(self, index):
         if self.random_mask:
